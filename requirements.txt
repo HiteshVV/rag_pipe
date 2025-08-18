@@ -1,0 +1,27 @@
+# Core RAG Pipeline Dependencies
+fastapi
+uvicorn[standard]
+pydantic
+python-multipart
+
+# Data Processing
+pandas
+numpy
+python-dateutil
+
+# Vector Database & Embeddings
+chromadb
+sentence-transformers
+
+# LLM Integration
+ollama
+httpx
+
+# Web Interface
+jinja2
+aiofiles
+
+# Utilities
+python-dotenv
+rich
+loguru
