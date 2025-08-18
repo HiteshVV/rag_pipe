@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>CAS RECON AI Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .fade-in { animation: fadeIn 0.7s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(20px);} to { opacity: 1; transform: none; } }
+    .floating-label:focus + label, .floating-label:not(:placeholder-shown) + label {
+      transform: translateY(-1.5rem) scale(0.85);
+      color: #e63946;
+    }
+    .floating-label + label {
+      position: absolute; left: 1.25rem; top: 1.1rem; pointer-events: none; transition: 0.2s; background: white; padding: 0 0.25rem; }
+    .input-shadow { box-shadow: 0 2px 8px 0 rgba(70,70,100,0.08); }
+    /* Fun animated bar */
+    .fun-bar {
+      background: linear-gradient(90deg, #e63946, #f1c40f, #457b9d, #e63946);
+      background-size: 200% 200%;
+      animation: funBarMove 4s linear infinite;
+      height: 8px;
+      border-radius: 8px;
+      margin-bottom: 2rem;
+    }
+    @keyframes funBarMove {
+      0% { background-position: 0% 50%; }
+      100% { background-position: 100% 50%; }
+    }
+    /* Confetti */
+    .confetti {
+      position: absolute; pointer-events: none; z-index: 50; }
+    /* Chart zoom modal */
+    .modal-bg { background: rgba(0,0,0,0.7); }
+    .modal-img { max-width: 90vw; max-height: 80vh; border-radius: 1.5rem; box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
+    /* Chart card color accents */
+    .chart-card-red { border-top: 6px solid #e63946; }
+    .chart-card-yellow { border-top: 6px solid #f1c40f; }
+    .chart-card-blue { border-top: 6px solid #457b9d; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    function scrollToAnalytics() {
+      const element = document.getElementById('analytics');
+      element.scrollIntoView({ behavior: 'smooth' });
+    }
+    async function handleQuery(event) {
+      event.preventDefault();
+      const query = document.getElementById('queryInput').value;
+      const answerBox = document.getElementById('answerBox');
+      answerBox.innerHTML = "<div class='fade-in text-gray-500'>Loading...</div>";
+      
+      try {
+        // First, get the text response
+        const response = await fetch('http://127.0.0.1:8000/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: query })
+        });
+        const data = await response.json();
+        
+        // Build the text response HTML
+        let html = '';
+        if (data.llm_summary || (data.top_snippets && data.top_snippets.length > 0)) {
+          html += `<div class=\"fade-in mt-6 p-6 bg-white rounded-2xl shadow-xl text-gray-900 text-lg border-l-8 border-[#e63946] relative\">`;
+          if (data.llm_summary) {
+            html += `<div><strong>Answer:</strong> ${data.llm_summary}</div>`;
+          }
+          if (data.top_snippets && data.top_snippets.length > 0) {
+            html += `<div class=\"mt-2\"><strong>Related Data:</strong><ul class=\"list-disc ml-6\">`;
+            data.top_snippets.forEach(snippet => {
+              html += `<li class=\"mb-1\">${snippet}</li>`;
+            });
+            html += `</ul></div>`;
+          }
+          if (data.explanation) {
+            html += `<div class=\"mt-2 text-sm text-gray-600\"><strong>Query Analysis:</strong> ${data.explanation}</div>`;
+          }
+          html += `</div>`;
+        } else if (data.explanation) {
+          html += `<div class=\"fade-in mt-6 p-6 bg-white rounded-2xl shadow-xl text-gray-900 text-lg border-l-8 border-[#e63946]\"><div class=\"mt-2 text-sm text-gray-600\"><strong>Response:</strong> ${data.explanation}</div></div>`;
+        } else {
+          html += `<div class=\"fade-in text-red-600 mt-4\">No answer returned from the RAG pipeline.</div>`;
+        }
+        
+        // Check if this is a count query or temporal query and try to get graph data
+        if (data.query_intent && (data.query_intent.is_count_query || data.query_intent.requires_chart)) {
+          try {
+            const graphResponse = await fetch('http://127.0.0.1:8000/graph-data', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ query: query })
+            });
+            
+            if (graphResponse.ok) {
+              const graphData = await graphResponse.json();
+              
+              if (graphData.chart_type !== 'empty') {
+                html += `<div class=\"mt-8 p-6 bg-white rounded-2xl shadow-xl border-l-8 border-[#457b9d]\">`;
+                html += `<h3 class=\"text-xl font-semibold text-[#457b9d] mb-4\">📊 ${graphData.title}</h3>`;
+                html += `<div class=\"flex justify-center\"><canvas id=\"dynamicChart\" width=\"400\" height=\"200\" style=\"max-width:100%; max-height:300px;\"></canvas></div>`;
+                html += `<div class=\"mt-4 text-sm text-gray-600\">Total Records: ${graphData.total_records}</div>`;
+                if (graphData.date_range && graphData.date_range.start) {
+                  html += `<div class=\"text-sm text-gray-600\">Date Range: ${graphData.date_range.start} to ${graphData.date_range.end}</div>`;
+                }
+                html += `</div>`;
+              }
+            }
+          } catch (graphError) {
+            console.log('No graph data available for this query');
+          }
+        }
+        
+        answerBox.innerHTML = html;
+        
+        // Render chart if graph data was fetched
+        if (document.getElementById('dynamicChart')) {
+          try {
+            const graphResponse = await fetch('http://127.0.0.1:8000/graph-data', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ query: query })
+            });
+            
+            if (graphResponse.ok) {
+              const graphData = await graphResponse.json();
+              const ctx = document.getElementById('dynamicChart').getContext('2d');
+              
+              let chartConfig;
+              
+              if (graphData.chart_type === 'bar') {
+                chartConfig = {
+                  type: 'bar',
+                  data: {
+                    labels: graphData.labels,
+                    datasets: [{
+                      label: 'Call Count',
+                      data: graphData.data,
+                      backgroundColor: '#457b9d',
+                      borderColor: '#457b9d',
+                      borderWidth: 1
+                    }]
+                  },
+                  options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                      legend: { display: false },
+                      title: {
+                        display: true,
+                        text: graphData.title,
+                        font: { size: 14 }
+                      }
+                    },
+                    scales: {
+                      y: {
+                        beginAtZero: true,
+                        title: {
+                          display: true,
+                          text: 'Number of Calls',
+                          font: { size: 12 }
+                        },
+                        ticks: { font: { size: 11 } }
+                      },
+                      x: {
+                        ticks: { font: { size: 11 } }
+                      }
+                    }
+                  }
+                };
+              } else if (graphData.chart_type === 'line') {
+                chartConfig = {
+                  type: 'line',
+                  data: {
+                    labels: graphData.labels,
+                    datasets: [{
+                      label: 'Call Count',
+                      data: graphData.data,
+                      borderColor: '#e63946',
+                      backgroundColor: 'rgba(230, 57, 70, 0.1)',
+                      tension: 0.4,
+                      fill: true
+                    }]
+                  },
+                  options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                      legend: { display: false },
+                      title: {
+                        display: true,
+                        text: graphData.title,
+                        font: { size: 14 }
+                      }
+                    },
+                    scales: {
+                      y: {
+                        beginAtZero: true,
+                        title: {
+                          display: true,
+                          text: 'Number of Calls',
+                          font: { size: 12 }
+                        },
+                        ticks: { font: { size: 11 } }
+                      },
+                      x: {
+                        ticks: { font: { size: 11 } }
+                      }
+                    }
+                  }
+                };
+              } else if (graphData.chart_type === 'pie') {
+                chartConfig = {
+                  type: 'pie',
+                  data: {
+                    labels: graphData.labels,
+                    datasets: [{
+                      data: graphData.data,
+                      backgroundColor: ['#e63946', '#457b9d', '#f1c40f', '#a8dadc', '#22223b', '#f7b801', '#43aa8b']
+                    }]
+                  },
+                  options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                      legend: { 
+                        display: true, 
+                        position: 'bottom',
+                        labels: { font: { size: 11 } }
+                      },
+                      title: {
+                        display: true,
+                        text: graphData.title,
+                        font: { size: 14 }
+                      }
+                    }
+                  }
+                };
+              }
+              
+              if (chartConfig) {
+                new Chart(ctx, chartConfig);
+              }
+            }
+          } catch (chartError) {
+            console.error('Error rendering chart:', chartError);
+          }
+        }
+        
+        launchConfetti();
+        
+      } catch (error) {
+        answerBox.innerHTML = `<div class='fade-in text-red-600 mt-4'>Error contacting backend: ${error.message}</div>`;
+      }
+    }
+    // Chart zoom modal logic
+    function showModal(imgSrc, imgAlt) {
+      const modal = document.getElementById('chartModal');
+      const modalImg = document.getElementById('modalImg');
+      const modalCaption = document.getElementById('modalCaption');
+      modalImg.src = imgSrc;
+      modalImg.alt = imgAlt;
+      modalCaption.textContent = imgAlt;
+      modal.classList.remove('hidden');
+    }
+    function closeModal() {
+      document.getElementById('chartModal').classList.add('hidden');
+    }
+    // Fun confetti effect
+    function launchConfetti() {
+      for (let i = 0; i < 18; i++) {
+        const conf = document.createElement('div');
+        conf.className = 'confetti';
+        conf.style.left = Math.random() * 100 + 'vw';
+        conf.style.top = '-30px';
+        conf.style.width = conf.style.height = (8 + Math.random() * 8) + 'px';
+        conf.style.background = `hsl(${Math.random()*360},80%,60%)`;
+        conf.style.borderRadius = Math.random() > 0.5 ? '50%' : '20%';
+        conf.style.opacity = 0.8;
+        conf.style.position = 'fixed';
+        conf.style.zIndex = 9999;
+        conf.style.transition = 'top 1.2s cubic-bezier(.4,2,.6,1), opacity 0.7s';
+        document.body.appendChild(conf);
+        setTimeout(() => {
+          conf.style.top = (60 + Math.random() * 30) + 'vh';
+          conf.style.opacity = 0;
+        }, 30);
+        setTimeout(() => conf.remove(), 1400);
+      }
+    }
+  </script>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-[#f5f8fc] via-[#eaf0fa] to-[#f9e6eb] text-[#333] font-sans flex flex-col min-h-screen">
+  <!-- Navbar -->
+  <div class="flex justify-center items-center px-10 py-6 bg-white shadow-md border-b border-gray-200">
+    <nav class="flex space-x-20 text-xl font-semibold">
+      <a href="#" class="hover:text-[#e63946] transition duration-300">Home</a>
+      <a href="#analytics" onclick="scrollToAnalytics()" class="hover:text-[#e63946] transition duration-300">Analytics</a>
+    </nav>
+  </div>
+  <!-- Hero Section with gradient and icon -->
+  <div class="px-10 py-16 text-center bg-gradient-to-r from-[#eaf0fa] via-[#f5f8fc] to-[#f9e6eb] rounded-b-3xl shadow-lg relative">
+    <div class="flex flex-col items-center justify-center">
+      <h1 class="text-5xl font-extrabold text-[#002d62] mb-4 tracking-tight drop-shadow-lg">CAS RECON AI Dashboard</h1>
+      <p class="text-lg text-gray-700 mb-8 max-w-2xl mx-auto">Type your query to learn more about our CDR data!</p>
+    </div>
+    <form onsubmit="handleQuery(event)" class="flex justify-center items-center space-x-4 max-w-2xl mx-auto relative mt-8">
+      <div class="relative flex-grow">
+        <input id="queryInput" name="query" placeholder=" " class="floating-label w-full p-4 pr-14 border-2 border-gray-300 rounded-xl input-shadow focus:border-[#e63946] focus:ring-2 focus:ring-[#e63946]/30 transition text-lg" required />
+        <label for="queryInput" class="absolute left-0 top-0 px-15 py-2 text-gray-500 pointer-events-none transition-all duration-200">Ask a question...</label>
+        <span class="absolute right-3 top-1/2 -translate-y-1/2 text-[#e63946]">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" /></svg>
+        </span>
+      </div>
+      <button type="submit" class="bg-[#e63946] text-white px-8 py-4 rounded-xl font-semibold text-lg shadow-lg hover:bg-[#c31630] transition flex items-center gap-2">
+        Submit
+      </button>
+    </form>
+    <div id="answerBox" class="mt-8 text-center min-h-[60px]"></div>
+  </div>
+  <!-- Analytics Section -->
+  <div id="analytics" class="px-10 py-16 flex-1">
+    <h2 class="text-3xl font-bold text-[#457b9d] mb-10 text-center tracking-tight">Generated Analytics</h2>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+      <!-- Chart 1 -->
+      <div class="p-8 rounded-2xl bg-white shadow-xl hover:scale-105 hover:shadow-2xl transition transform duration-300 relative group cursor-zoom-in chart-card-red" onclick="showModal('/static/total_call_duration.jpeg','Total Call Duration Per Device')">
+        <h3 class="font-semibold text-[#e63946] mb-2 text-lg">Total Call Duration Per Device</h3>
+        <img src="/static/total_call_duration.jpeg" alt="Total Call Duration" class="w-full h-auto rounded-xl shadow-md">
+      </div>
+      <!-- Chart 2 -->
+      <div class="p-8 rounded-2xl bg-white shadow-xl hover:scale-105 hover:shadow-2xl transition transform duration-300 relative group cursor-zoom-in chart-card-yellow" onclick="showModal('/static/no_of_calls_per_day.jpeg','Calls by Hour of Day')">
+        <h3 class="font-semibold text-[#f1c40f] mb-2 text-lg">Calls by Hour of Day</h3>
+        <img src="/static/no_of_calls_per_day.jpeg" alt="Calls by Hour" class="w-full h-auto rounded-xl shadow-md">
+      </div>
+      <!-- Chart 3 -->
+      <div class="p-8 rounded-2xl bg-white shadow-xl hover:scale-105 hover:shadow-2xl transition transform duration-300 relative group cursor-zoom-in chart-card-blue" onclick="showModal('/static/in_vs_out.jpeg','Incoming vs Outgoing Calls')">
+        <h3 class="font-semibold text-[#457b9d] mb-2 text-lg">Incoming vs Outgoing Calls</h3>
+        <img src="/static/in_vs_out.jpeg" alt="Incoming vs Outgoing" class="w-full h-auto rounded-xl shadow-md">
+      </div>
+      <!-- Chart 4 -->
+      <div class="p-8 rounded-2xl bg-white shadow-xl hover:scale-105 hover:shadow-2xl transition transform duration-300 relative group cursor-zoom-in chart-card-yellow" onclick="showModal('/static/incoming.jpeg','Inbound Call Trends Per Audio Interface')">
+        <h3 class="font-semibold text-[#f1c40f] mb-2 text-lg">Inbound Call Trends Per Audio Interface</h3>
+        <img src="/static/incoming.jpeg" alt="Inbound Call Trends" class="w-full h-auto rounded-xl shadow-md">
+      </div>
+      <!-- Chart 5 -->
+      <div class="p-8 rounded-2xl bg-white shadow-xl hover:scale-105 hover:shadow-2xl transition transform duration-300 relative group cursor-zoom-in chart-card-red" onclick="showModal('/static/outgoing.jpeg','Outbound Call Trends Per Audio Interface')">
+        <h3 class="font-semibold text-[#e63946] mb-2 text-lg">Outbound Call Trends Per Audio Interface</h3>
+        <img src="/static/outgoing.jpeg" alt="Outbound Call Trends" class="w-full h-auto rounded-xl shadow-md">
+      </div>
+      <!-- Chart 6 -->
+      <div class="p-8 rounded-2xl bg-white shadow-xl hover:scale-105 hover:shadow-2xl transition transform duration-300 relative group cursor-zoom-in chart-card-blue" onclick="showModal('/static/call_trends.jpeg','Call Trends Per Day')">
+        <h3 class="font-semibold text-[#457b9d] mb-2 text-lg">Call Trends Per Day</h3>
+        <img src="/static/call_trends.jpeg" alt="Call Trends Per Day" class="w-full h-auto rounded-xl shadow-md">
+      </div>
+    </div>
+  </div>
+  <!-- Chart Zoom Modal -->
+  <div id="chartModal" class="fixed inset-0 flex items-center justify-center bg-black/70 z-50 hidden" onclick="closeModal()">
+    <div class="flex flex-col items-center" onclick="event.stopPropagation()">
+      <img id="modalImg" src="" alt="Zoomed Chart" class="modal-img mb-4" />
+      <div id="modalCaption" class="text-white text-lg font-semibold mb-2"></div>
+      <button onclick="closeModal()" class="mt-2 px-6 py-2 bg-[#e63946] text-white rounded-lg shadow hover:bg-[#f1c40f] hover:text-[#222] transition">Close</button>
+    </div>
+  </div>
+  <!-- Footer -->
+  <footer class="bg-white border-t border-gray-200 py-6 text-center text-gray-500 text-sm mt-10">
+    <span>© 2025 CAS RECON AI | <a href="https://github.com/SaranyaPotturi/cdr_rag" class="text-[#e63946] hover:underline">GitHub Repo</a></span>
+  </footer>
+</body>
+</html>
