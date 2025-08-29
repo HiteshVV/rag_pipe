@@ -1,3 +1,5 @@
+# Always track timing_utils.py
+!timing_utils.py
 <<<<<<< HEAD
 # Python virtual environment
 venv/
