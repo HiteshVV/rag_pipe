@@ -8,7 +8,7 @@ import ollama
 from loguru import logger
 from typing import Tuple, Any
 
-from config.settings import EMBEDDING_MODEL_NAME, OLLAMA_BASE_URL, MISTRAL_MODEL_NAME
+from config.settings import EMBEDDING_MODEL_NAME, OLLAMA_BASE_URL, MISTRAL_MODEL_NAME, MAX_CONTEXT_LENGTH
 
 def initialize_embedding_model(model_name: str = None) -> SentenceTransformer:
     """
@@ -170,14 +170,32 @@ Your role is to:
 3. Identify trends, anomalies, and important metrics
 4. Provide clear, concise explanations of telecommunications data
 
-When responding:
-- Be specific and data-driven
-- Use proper telecommunications terminology
-- Highlight important patterns or anomalies
-- Provide context for your findings
-- If asked about specific calls, include relevant details like time, duration, participants, and direction
+CRITICAL FORMATTING REQUIREMENTS:
+- Format response with numbered list or clear bullet points
+- Each main point should be on a separate line
+- Use simple, clean formatting that displays well in text
+- Keep each point concise and data-focused
+- Use specific numbers and percentages when available
 
-Focus on being helpful and accurate in your analysis of the CDR data."""
+REQUIRED RESPONSE FORMAT:
+Start with a brief summary, then list findings clearly:
+
+1. Total calls: [specific number with context]
+2. Call distribution: [breakdown with percentages] 
+3. Time patterns: [when calls occurred]
+4. Key insights: [2-3 main takeaways]
+5. Summary: [brief conclusion]
+
+Example:
+Based on CDR analysis for June 12th 2025:
+
+1. Total calls: 206 calls were recorded during the day
+2. Call distribution: 158 outgoing (77%) vs 48 incoming (23%)  
+3. Time patterns: Activity from 11:16 AM to 4:40 PM
+4. Key insights: High outgoing ratio indicates active outbound communication, limited to 7 unique participants
+5. Summary: Concentrated business-hours calling pattern with strong outbound focus
+
+Always provide specific data and clear, actionable insights."""
 
     # Create user prompt with context
     user_prompt = f"""Based on the following CDR (Call Detail Records) data, please answer the user's question.
@@ -189,8 +207,24 @@ User Question: {query}
 
 Please provide a comprehensive analysis based on the available data."""
 
+    # Truncate context if too long
+    if len(user_prompt) > MAX_CONTEXT_LENGTH:
+        logger.warning(f"Context too long ({len(user_prompt)} chars), truncating to {MAX_CONTEXT_LENGTH}")
+        # Keep the query and truncate the context part
+        context_truncated = context[:MAX_CONTEXT_LENGTH - 200]  # Leave room for query and formatting
+        user_prompt = f"""Based on the following CDR (Call Detail Records) data, please answer the user's question.
+
+CDR Context:
+{context_truncated}...
+
+User Question: {query}
+
+Please provide a comprehensive analysis based on the available data."""
+
     try:
         logger.info(f"Generating Mistral response for query: {query[:100]}...")
+        logger.info(f"Context length: {len(context)} characters")
+        logger.info(f"Context preview: {context[:500]}...")
         
         response = client.chat(
             model=model_name,
