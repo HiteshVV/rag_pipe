@@ -44,7 +44,7 @@ def time_operation(operation_name: str, func: Callable, *args, **kwargs) -> tupl
     start_time = time.time()
     result = func(*args, **kwargs)
     execution_time = time.time() - start_time
-    logger.info(f" {operation_name} took: {execution_time:.3f}s")
+    logger.info(f"⏱ {operation_name} took: {execution_time:.3f}s")
     return result, execution_time
 
 class TimingContext:
@@ -63,7 +63,7 @@ class TimingContext:
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.execution_time = time.time() - self.start_time
-        logger.info(f" {self.operation_name} took: {self.execution_time:.3f}s")
+        logger.info(f"⏱ {self.operation_name} took: {self.execution_time:.3f}s")
 
 class PipelineTimer:
     """
@@ -91,7 +91,7 @@ class PipelineTimer:
         result = func(*args, **kwargs)
         execution_time = time.time() - start_time
         self.timings[stage_name] = execution_time
-        logger.info(f" {stage_name} took: {execution_time:.3f}s")
+        logger.info(f"⏱ {stage_name} took: {execution_time:.3f}s")
         return result
     
     def get_total_time(self) -> float:
@@ -108,7 +108,7 @@ class PipelineTimer:
     def log_summary(self):
         """Log timing summary"""
         total_time = self.get_total_time()
-        logger.info(f"PIPELINE SUMMARY - Total: {total_time:.3f}s")
+        logger.info(f"⏱PIPELINE SUMMARY - Total: {total_time:.3f}s")
         for stage, time_taken in self.timings.items():
             percentage = (time_taken / total_time) * 100
             logger.info(f"  - {stage}: {time_taken:.3f}s ({percentage:.1f}%)")

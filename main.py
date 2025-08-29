@@ -8,10 +8,12 @@ from typing import Dict, List, Any, Tuple
 from loguru import logger
 from datetime import datetime
 import json
+import time
 
 from rag_components import extract_time_filters, extract_participant_filters, build_chroma_filter
 from model_setup import generate_mistral_response
 from chroma_setup import query_chromadb
+from timing_utils import PipelineTimer
 
 def validate_query(query: str) -> Dict[str, Any]:
     """
@@ -275,7 +277,7 @@ def generate_analytics_data(df: pd.DataFrame, query: str, intent: Dict) -> Dict[
         # Count analytics
         if intent['requires_stats'] or intent['type'] == 'count':
             total_calls = len(df)
-            unique_participants = len(set(df['source_address'].unique().tolist() + df['destination_address'].unique().tolist()))
+            unique_participants = len(set(list(df['source_address'].unique()) + list(df['destination_address'].unique())))
             
             analytics['summary_stats'] = {
                 'type': 'single_value',
@@ -428,9 +430,13 @@ def rag_pipeline(
     """
     logger.info(f"Starting RAG pipeline for query: {query}")
     
+    # Initialize pipeline timer
+    timer = PipelineTimer()
+    
     try:
         # 1. Validate query first
-        validation = validate_query(query)
+        validation = timer.time_stage("Query Validation", validate_query, query)
+        
         if not validation['is_valid']:
             logger.warning(f"Invalid query detected: {validation['reason']}")
             return {
@@ -441,11 +447,12 @@ def rag_pipeline(
                 'explanation': f"Query validation failed: {validation['reason']}",
                 'analytics': {},
                 'query_valid': False,
-                'validation_reason': validation['reason']
+                'validation_reason': validation['reason'],
+                'timing': timer.get_timing_summary()
             }
         
         # 2. Analyze query intent
-        intent = analyze_query_intent(query)
+        intent = timer.time_stage("Query Intent Analysis", analyze_query_intent, query)
         
         # 3. Build ChromaDB filter
         chroma_filter = build_chroma_filter(query)
@@ -475,7 +482,7 @@ def rag_pipeline(
                 logger.error(f"Error getting sample documents: {e}")
                 retrieval_results = {"documents": [[]]}
         else:
-            retrieval_results = query_chromadb(
+            retrieval_results = timer.time_stage("Vector Retrieval", query_chromadb,
                 collection=chroma_collection,
                 query=query,
                 embedding_model=embedding_model,
@@ -484,10 +491,10 @@ def rag_pipeline(
             )
         
         # 6. Filter dataframe for analytics
-        filtered_df = filter_dataframe_by_query(df_all_records, query)
+        filtered_df = timer.time_stage("DataFrame Filtering", filter_dataframe_by_query, df_all_records, query)
         
         # 7. Generate analytics data
-        analytics = generate_analytics_data(filtered_df, query, intent)
+        analytics = timer.time_stage("Analytics Generation", generate_analytics_data, filtered_df, query, intent)
         
         # 8. Build context from retrieved documents
         if intent['is_count_query']:
@@ -552,45 +559,27 @@ def rag_pipeline(
             context_docs = []
             
         elif intent['time_based'] or 'hour' in query.lower():
-            # For hourly trend queries, provide complete hourly breakdown
+            # For hourly trend queries, provide summarized hourly breakdown
             context_parts = [f"Query: {query}"]
             context_parts.append(f"Total calls analyzed: {len(filtered_df)}")
             
             if not filtered_df.empty and 'start_time' in filtered_df.columns:
-                # Create detailed hourly breakdown
+                # Create simplified hourly breakdown
                 df_temp = filtered_df.copy()
                 df_temp['start_time'] = pd.to_datetime(df_temp['start_time'], errors='coerce')
                 df_temp['hour'] = df_temp['start_time'].dt.hour
                 
-                hourly_stats = df_temp.groupby('hour').agg({
-                    'direction': lambda x: x.value_counts().to_dict(),
-                    'duration_seconds': ['count', 'mean'],
-                    'source_address': 'nunique',
-                    'destination_address': 'nunique'
-                }).round(1)
+                hourly_counts = df_temp.groupby('hour').size()
                 
                 context_parts.append("\nHourly Call Distribution:")
+                context_parts.append(f"Peak hours: {hourly_counts.nlargest(3).to_dict()}")
+                context_parts.append(f"Low activity hours: {hourly_counts.nsmallest(3).to_dict()}")
+                context_parts.append(f"Total hours with activity: {len(hourly_counts)}")
                 
-                for hour in range(24):
-                    if hour in df_temp['hour'].values:
-                        hour_data = df_temp[df_temp['hour'] == hour]
-                        total_hour_calls = len(hour_data)
-                        
-                        direction_counts = hour_data['direction'].value_counts().to_dict()
-                        avg_duration = hour_data['duration_seconds'].mean()
-                        unique_participants = len(set(hour_data['source_address'].unique().tolist() + 
-                                                   hour_data['destination_address'].unique().tolist()))
-                        
-                        context_parts.append(f"Hour {hour:02d} ({hour:02d}:00-{hour+1:02d}:00): {total_hour_calls} calls")
-                        
-                        if direction_counts:
-                            for direction, count in direction_counts.items():
-                                context_parts.append(f"  - {direction.capitalize()}: {count}")
-                        
-                        context_parts.append(f"  - Average duration: {avg_duration:.1f}s")
-                        context_parts.append(f"  - Unique participants: {unique_participants}")
-                    else:
-                        context_parts.append(f"Hour {hour:02d} ({hour:02d}:00-{hour+1:02d}:00): 0 calls")
+                # Add direction summary
+                if 'direction' in df_temp.columns:
+                    direction_by_hour = df_temp.groupby(['hour', 'direction']).size().unstack(fill_value=0)
+                    context_parts.append(f"Direction distribution varies by hour: {direction_by_hour.sum().to_dict()}")
             
             context = "\n".join(context_parts)
             context_docs = []
@@ -655,7 +644,7 @@ def rag_pipeline(
                     context += f"- Query year: {time_filters['year']}\n"
         
         # 9. Generate LLM response
-        llm_response = generate_mistral_response(
+        llm_response = timer.time_stage("LLM Generation", generate_mistral_response,
             client=llm_client,
             query=query,
             context=context
@@ -672,19 +661,18 @@ def rag_pipeline(
                     if target_date in doc or target_date.replace('-', '/') in doc or target_date.replace('-', ' ') in doc:
                         total_found_for_date += 1
         
-        explanation_text = f"Found {len(context_docs)} relevant CDR records"
-        if total_found_for_date > len(context_docs):
-            explanation_text += f" (showing sample of {total_found_for_date} total records for this date)"
-        explanation_text += f". Analyzed {len(filtered_df)} records for patterns."
-        
+        # Remove the explanation_text line from the response
         response = {
             "llm_summary": llm_response,
             "top_snippets": context_docs[:3] if context_docs else [],
             "retrieved_count": len(context_docs),
             "total_matching_date": total_found_for_date if is_date_query else None,
-            "explanation": explanation_text,
+            # "explanation": explanation_text,  # Removed as per user request
             "query_intent": intent
         }
+        
+        # Log timing summary
+        timer.log_summary()
         
         # 10. Add chart data if analytics were generated
         if analytics:
