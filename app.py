@@ -273,7 +273,6 @@ async def get_graph_data(data: QueryRequest):
         if not (query_intent.get('is_count_query', False) or query_intent.get('requires_chart', False)):
             raise HTTPException(status_code=400, detail="Query is not suitable for graph generation. Graphs are generated for count queries and temporal analysis.")
         
-        # Filter the dataframe
         filtered_df = filter_dataframe_by_query(df_all_records, query)
         
         if filtered_df.empty:
