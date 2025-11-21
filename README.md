@@ -73,38 +73,7 @@ Example queries for your CDR data:
 - `GET /stats` - Data statistics
 - `GET /docs` - API documentation
 
-## Data Format
 
-The pipeline expects CDR data in Elasticsearch export format (JSON). Your `es_data.json` should contain:
-
-```json
-{
-  "hits": {
-    "hits": [
-      {
-        "_source": {
-          "fields": {
-            "communicationRecord": {
-              "startTime": "2025-06-12T11:24:16.000Z",
-              "endTime": "2025-06-12T11:24:17.000Z",
-              "direction": "outgoing",
-              "comType": "VoiceCall"
-            },
-            "participants": [
-              {"address": "5656", "involvement": "source"},
-              {"address": "5651", "involvement": "destination"}
-            ],
-            "deviceInfo": {
-              "pUserID": "user123",
-              "audioInterface": "Handset 1"
-            }
-          }
-        }
-      }
-    ]
-  }
-}
-```
 
 ## Query Examples
 
